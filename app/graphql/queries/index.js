@@ -3,9 +3,19 @@ export const GET_ORDERS = `
   query {
     orders(first: 10) {
       edges {
-        cursor
         node {
           id
+          name
+          createdAt
+          displayFinancialStatus
+          displayFulfillmentStatus
+          currentTotalPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+          email
         }
       }
       pageInfo {
