@@ -254,6 +254,55 @@ export default function OrdersPage() {
                     </Text>
                   </InlineStack>
                 </BlockStack>
+
+                <Divider />
+
+                <Box>
+                  <Text as="h4" variant="headingSm">Products</Text>
+                  <BlockStack gap="200">
+                    {selectedOrder.lineItems.edges.map((lineItemEdge) => {
+                      const item = lineItemEdge.node;
+                      return (
+                        <Box key={item.id} padding="200" background="bg-surface-secondary" borderRadius="100">
+                          <BlockStack gap="100">
+                            <InlineStack align="space-between">
+                              <Text as="p" variant="bodyMd" fontWeight="semibold">{item.name}</Text>
+                              <Text as="p" variant="bodyMd">Qty: {item.quantity}</Text>
+                            </InlineStack>
+
+                            {item.variant && item.variant.title && item.variant.title !== 'Default Title' && (
+                              <Text as="p" variant="bodySm" color="subdued">
+                                Variant: {item.variant.title}
+                              </Text>
+                            )}
+
+                            {item.sku && (
+                              <Text as="p" variant="bodySm" color="subdued">
+                                SKU: {item.sku}
+                              </Text>
+                            )}
+
+                            <InlineStack align="space-between">
+                              <Text as="p" variant="bodySm">
+                                {formatCurrency(
+                                  item.originalUnitPriceSet.shopMoney.amount,
+                                  item.originalUnitPriceSet.shopMoney.currencyCode
+                                )} each
+                              </Text>
+                              <Text as="p" variant="bodyMd" fontWeight="semibold">
+                                {formatCurrency(
+                                  item.originalTotalSet.shopMoney.amount,
+                                  item.originalTotalSet.shopMoney.currencyCode
+                                )}
+                              </Text>
+                            </InlineStack>
+                          </BlockStack>
+                        </Box>
+                      );
+                    })}
+                  </BlockStack>
+                </Box>
+
               </BlockStack>
             </Card>
           </Layout.Section>
