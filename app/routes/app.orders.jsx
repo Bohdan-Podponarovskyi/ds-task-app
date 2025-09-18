@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { useLoaderData } from "@remix-run/react";
+import {useEffect, useState} from "react";
+import { useLoaderData, useFetcher } from "@remix-run/react";
+
 import {
   Box,
   Card,
@@ -15,6 +16,7 @@ import {
   ButtonGroup,
   Popover,
   ActionList,
+  Spinner,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -23,24 +25,22 @@ import { formatCurrency, formatDate } from "../utils/formatters";
 import { getStatusBadge, getFulfillmentBadge } from "../utils/badges";
 import { exportOrdersWithLineItems, exportOrdersSummary } from "../utils/csvExport";
 
+// Loader handles initial page load
 export const loader = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
 
   try {
-    console.log("Attempting to fetch orders...");
-
-    const response = await admin.graphql(GET_ORDERS);
+    const response = await admin.graphql(GET_ORDERS, {
+      variables: { first: 5, after: null },
+    });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error("GraphQL response not ok:", errorText);
-      throw new Error(`GraphQL request failed: ${response.status} - ${errorText}`);
+      throw new Error(`GraphQL request failed: ${response.status}`);
     }
 
     const responseJson = await response.json();
 
     if (responseJson.errors) {
-      console.error("GraphQL errors:", responseJson.errors);
       throw new Error(`GraphQL errors: ${JSON.stringify(responseJson.errors)}`);
     }
 
@@ -56,13 +56,82 @@ export const loader = async ({ request }) => {
       error: `Failed to load orders: ${error.message}`,
     };
   }
+    };
+
+// Action handles "load more" requests
+export const action = async ({ request }) => {
+  const { admin } = await authenticate.admin(request);
+
+  try {
+    const formData = await request.formData();
+    const after = formData.get("after");
+    const first = parseInt(formData.get("first") || "5");
+
+    const response = await admin.graphql(GET_ORDERS, {
+      variables: { first, after },
+    });
+
+    if (!response.ok) {
+      throw new Error(`GraphQL request failed: ${response.status}`);
+    }
+
+    const responseJson = await response.json();
+    if (responseJson.errors) {
+      throw new Error(`GraphQL errors: ${JSON.stringify(responseJson.errors)}`);
+    }
+
+    return {
+      orders: responseJson.data?.orders?.edges || [],
+      pageInfo: responseJson.data?.orders?.pageInfo || {},
+    };
+  } catch (error) {
+    console.error("Load more error:", error);
+    return {
+      orders: [],
+      pageInfo: {},
+      error: `Failed to load more orders: ${error.message}`,
+    };
+  }
 };
 
 export default function OrdersPage() {
-  const { orders, pageInfo, error } = useLoaderData();
+  const { orders: initialOrders, pageInfo: initialPageInfo, error } = useLoaderData();
+  const loadMoreFetcher = useFetcher();
+
+  // Combine initial orders with loaded orders
+  const [allOrders, setAllOrders] = useState(initialOrders);
+  const [pageInfo, setPageInfo] = useState(initialPageInfo);
+
+  // Other states
   const [selectedOrderId, setSelectedOrderId] = useState(null);
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
   const [exportPopoverActive, setExportPopoverActive] = useState(false);
+
+  // Handle load more response
+  useEffect(() => {
+    if (loadMoreFetcher.data && !loadMoreFetcher.data.error) {
+      const newOrders = loadMoreFetcher.data.orders;
+      const newPageInfo = loadMoreFetcher.data.pageInfo;
+
+      setAllOrders(prev => [...prev, ...newOrders]);
+      setPageInfo(newPageInfo);
+    }
+  }, [loadMoreFetcher.data]);
+
+  // Handle load more click - much simpler!
+  const handleLoadMore = () => {
+    if (pageInfo.hasNextPage && pageInfo.endCursor) {
+      loadMoreFetcher.submit(
+        {
+          after: pageInfo.endCursor,
+          first: "5"
+        },
+        { method: "post" }
+      );
+    }
+  };
+
+  const isLoadingMore = loadMoreFetcher.state === "submitting";
 
   if (error) {
     return (
@@ -92,7 +161,7 @@ export default function OrdersPage() {
     );
   }
 
-  if (!orders || orders.length === 0) {
+  if (!allOrders || allOrders.length === 0) {
     return (
       <Page>
         <TitleBar title="Orders" />
@@ -115,10 +184,9 @@ export default function OrdersPage() {
   }
 
   const selectedOrder = selectedOrderId
-    ? orders.find(edge => edge.node.id === selectedOrderId)?.node
+    ? allOrders.find(edge => edge.node.id === selectedOrderId)?.node
     : null;
 
-  // Selection handlers
   const handleSelectOrder = (orderId, checked) => {
     if (checked) {
       setSelectedOrderIds([...selectedOrderIds, orderId]);
@@ -129,7 +197,7 @@ export default function OrdersPage() {
 
   const handleSelectAll = (checked) => {
     if (checked) {
-      setSelectedOrderIds(orders.map(edge => edge.node.id));
+      setSelectedOrderIds(allOrders.map(edge => edge.node.id));
     } else {
       setSelectedOrderIds([]);
     }
@@ -137,7 +205,7 @@ export default function OrdersPage() {
 
   // Export handlers
   const getSelectedOrders = () => {
-    return orders
+    return allOrders
       .filter(edge => selectedOrderIds.includes(edge.node.id))
       .map(edge => edge.node);
   };
@@ -165,15 +233,15 @@ export default function OrdersPage() {
   };
 
   const handleExportAll = () => {
-    const allOrders = orders.map(edge => edge.node);
-    exportOrdersWithLineItems(allOrders, `all_orders_${new Date().toISOString().split('T')[0]}.csv`);
+    const orders = allOrders.map(edge => edge.node);
+    exportOrdersWithLineItems(orders, `all_orders_${new Date().toISOString().split('T')[0]}.csv`);
     setExportPopoverActive(false);
   };
 
-  const allSelected = orders.length > 0 && selectedOrderIds.length === orders.length;
-  const someSelected = selectedOrderIds.length > 0 && selectedOrderIds.length < orders.length;
+  const allSelected = allOrders.length > 0 && selectedOrderIds.length === allOrders.length;
+  const someSelected = selectedOrderIds.length > 0 && selectedOrderIds.length < allOrders.length;
 
-  const tableRows = orders.map((edge) => {
+  const tableRows = allOrders.map((edge) => {
     const order = edge.node;
     const customer = order.customer;
     const customerName = customer
@@ -207,7 +275,6 @@ export default function OrdersPage() {
     ];
   });
 
-  // Export popover activator
   const exportActivator = (
     <Button
       variant="primary"
@@ -228,11 +295,11 @@ export default function OrdersPage() {
             <BlockStack gap="400">
               <InlineStack align="space-between">
                 <Text as="h2" variant="headingMd">
-                  Recent Orders ({orders.length})
+                  Recent Orders ({allOrders.length})
                 </Text>
-                <InlineStack gap="200">
+                <InlineStack gap="200" blockAlign="center">
                   {selectedOrderIds.length > 0 && (
-                    <Text variant="bodyMd" color="subdued">
+                    <Text as="p" variant="bodyMd" color="subdued">
                       {selectedOrderIds.length} selected
                     </Text>
                   )}
@@ -266,7 +333,7 @@ export default function OrdersPage() {
                     )}
                     {selectedOrderIds.length === 0 && (
                       <Button
-                        variant="secondary"
+                        variant="primary"
                         onClick={handleExportAll}
                         size="slim"
                       >
@@ -274,7 +341,12 @@ export default function OrdersPage() {
                       </Button>
                     )}
                     {pageInfo.hasNextPage && (
-                      <Button variant="secondary" size="slim">
+                      <Button
+                        variant="secondary"
+                        size="slim"
+                        onClick={handleLoadMore}
+                        loading={isLoadingMore}
+                      >
                         Load More
                       </Button>
                     )}
@@ -311,6 +383,22 @@ export default function OrdersPage() {
                 rows={tableRows}
                 hoverable
               />
+
+              {/* Loading and error states */}
+              {isLoadingMore && (
+                <InlineStack align="center" gap="200">
+                  <Spinner size="small" />
+                  <Text as="p" variant="bodyMd" color="subdued">Loading more orders...</Text>
+                </InlineStack>
+              )}
+
+              {loadMoreFetcher.data?.error && (
+                <Box background="bg-surface-critical-subdued" padding="200" borderRadius="100">
+                  <Text as="p" variant="bodyMd" color="critical">
+                    {loadMoreFetcher.data.error}
+                  </Text>
+                </Box>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>

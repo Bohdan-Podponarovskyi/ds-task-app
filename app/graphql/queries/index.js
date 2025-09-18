@@ -1,7 +1,7 @@
 export const GET_ORDERS = `
   #graphql
-  query GetOrdersWithLineItems {
-    orders(first: 10) {
+  query GetOrdersWithLineItems($first: Int!, $after: String) {
+    orders(first: $first, after: $after) {
       edges {
         node {
           id
