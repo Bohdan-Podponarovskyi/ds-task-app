@@ -1,21 +1,11 @@
 import { Badge } from "@shopify/polaris";
 
-export function formatCurrency(amount, currencyCode) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: currencyCode || "USD",
-  }).format(parseFloat(amount));
-}
-
-export function formatDate(dateString) {
-  return new Date(dateString).toLocaleString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+/**
+ * Returns a Shopify Polaris Badge component for order payment status.
+ *
+ * @param {string} status - The payment status from Shopify's displayFinancialStatus field
+ * @returns {JSX.Element} A Polaris Badge component with status-specific styling
+ */
 
 export function getStatusBadge(status) {
   switch (status) {
@@ -36,6 +26,13 @@ export function getStatusBadge(status) {
   }
 }
 
+/**
+ * Returns a Shopify Polaris Badge component for order fulfillment status.
+ *
+ * @param {string} status - The fulfillment status from Shopify's displayFulfillmentStatus field
+ * @returns {JSX.Element} A Polaris Badge component with status-specific styling
+ *
+ */
 export function getFulfillmentBadge(status) {
   switch (status) {
     case "FULFILLED":

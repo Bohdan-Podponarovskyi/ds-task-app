@@ -11,11 +11,17 @@ import {
   Button,
   InlineStack,
   Divider,
+  Checkbox,
+  ButtonGroup,
+  Popover,
+  ActionList,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { GET_ORDERS } from "../graphql/queries";
-import { formatCurrency, formatDate, getStatusBadge, getFulfillmentBadge } from "../utils/index.jsx"
+import { formatCurrency, formatDate } from "../utils/formatters";
+import { getStatusBadge, getFulfillmentBadge } from "../utils/badges";
+import { exportOrdersWithLineItems, exportOrdersSummary } from "../utils/csvExport";
 
 export const loader = async ({ request }) => {
   const { admin } = await authenticate.admin(request);
@@ -25,9 +31,6 @@ export const loader = async ({ request }) => {
 
     const response = await admin.graphql(GET_ORDERS);
 
-    console.log("Response status:", response.status);
-    console.log("Response ok:", response.ok);
-
     if (!response.ok) {
       const errorText = await response.text();
       console.error("GraphQL response not ok:", errorText);
@@ -35,7 +38,6 @@ export const loader = async ({ request }) => {
     }
 
     const responseJson = await response.json();
-    console.log("Response JSON:", JSON.stringify(responseJson, null, 2));
 
     if (responseJson.errors) {
       console.error("GraphQL errors:", responseJson.errors);
@@ -48,8 +50,6 @@ export const loader = async ({ request }) => {
     };
   } catch (error) {
     console.error("Error fetching orders:", error);
-    console.error("Error message:", error.message);
-    console.error("Error stack:", error.stack);
     return {
       orders: [],
       pageInfo: {},
@@ -61,6 +61,8 @@ export const loader = async ({ request }) => {
 export default function OrdersPage() {
   const { orders, pageInfo, error } = useLoaderData();
   const [selectedOrderId, setSelectedOrderId] = useState(null);
+  const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [exportPopoverActive, setExportPopoverActive] = useState(false);
 
   if (error) {
     return (
@@ -116,6 +118,61 @@ export default function OrdersPage() {
     ? orders.find(edge => edge.node.id === selectedOrderId)?.node
     : null;
 
+  // Selection handlers
+  const handleSelectOrder = (orderId, checked) => {
+    if (checked) {
+      setSelectedOrderIds([...selectedOrderIds, orderId]);
+    } else {
+      setSelectedOrderIds(selectedOrderIds.filter(id => id !== orderId));
+    }
+  };
+
+  const handleSelectAll = (checked) => {
+    if (checked) {
+      setSelectedOrderIds(orders.map(edge => edge.node.id));
+    } else {
+      setSelectedOrderIds([]);
+    }
+  };
+
+  // Export handlers
+  const getSelectedOrders = () => {
+    return orders
+      .filter(edge => selectedOrderIds.includes(edge.node.id))
+      .map(edge => edge.node);
+  };
+
+  const handleExportDetailed = () => {
+    const selectedOrders = getSelectedOrders();
+    if (selectedOrders.length === 0) {
+      alert('Please select orders to export');
+      return;
+    }
+
+    exportOrdersWithLineItems(selectedOrders);
+    setExportPopoverActive(false);
+  };
+
+  const handleExportSummary = () => {
+    const selectedOrders = getSelectedOrders();
+    if (selectedOrders.length === 0) {
+      alert('Please select orders to export');
+      return;
+    }
+
+    exportOrdersSummary(selectedOrders);
+    setExportPopoverActive(false);
+  };
+
+  const handleExportAll = () => {
+    const allOrders = orders.map(edge => edge.node);
+    exportOrdersWithLineItems(allOrders, `all_orders_${new Date().toISOString().split('T')[0]}.csv`);
+    setExportPopoverActive(false);
+  };
+
+  const allSelected = orders.length > 0 && selectedOrderIds.length === orders.length;
+  const someSelected = selectedOrderIds.length > 0 && selectedOrderIds.length < orders.length;
+
   const tableRows = orders.map((edge) => {
     const order = edge.node;
     const customer = order.customer;
@@ -123,7 +180,14 @@ export default function OrdersPage() {
       ? `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.email
       : order.email || 'Guest';
 
+    const isSelected = selectedOrderIds.includes(order.id);
+
     return [
+      <Checkbox
+        key={`checkbox-${order.id}`}
+        checked={isSelected}
+        onChange={(checked) => handleSelectOrder(order.id, checked)}
+      />,
       order.name,
       customerName,
       formatDate(order.createdAt),
@@ -143,6 +207,18 @@ export default function OrdersPage() {
     ];
   });
 
+  // Export popover activator
+  const exportActivator = (
+    <Button
+      variant="primary"
+      onClick={() => setExportPopoverActive(!exportPopoverActive)}
+      disabled={selectedOrderIds.length === 0}
+      size="slim"
+    >
+      Export ({selectedOrderIds.length})
+    </Button>
+  );
+
   return (
     <Page>
       <TitleBar title="Orders" />
@@ -154,24 +230,76 @@ export default function OrdersPage() {
                 <Text as="h2" variant="headingMd">
                   Recent Orders ({orders.length})
                 </Text>
-                {pageInfo.hasNextPage && (
-                  <Button variant="primary" size="slim">
-                    Load More
-                  </Button>
-                )}
+                <InlineStack gap="200">
+                  {selectedOrderIds.length > 0 && (
+                    <Text variant="bodyMd" color="subdued">
+                      {selectedOrderIds.length} selected
+                    </Text>
+                  )}
+                  <ButtonGroup>
+                    {selectedOrderIds.length > 0 && (
+                      <Popover
+                        active={exportPopoverActive}
+                        activator={exportActivator}
+                        onClose={() => setExportPopoverActive(false)}
+                      >
+                        <ActionList
+                          items={[
+                            {
+                              content: 'Export Selected (Detailed)',
+                              helpText: 'One row per product in each order',
+                              onAction: handleExportDetailed
+                            },
+                            {
+                              content: 'Export Selected (Summary)',
+                              helpText: 'One row per order with totals',
+                              onAction: handleExportSummary
+                            },
+                            {
+                              content: 'Export All Orders',
+                              helpText: 'Export all visible orders with details',
+                              onAction: handleExportAll
+                            }
+                          ]}
+                        />
+                      </Popover>
+                    )}
+                    {selectedOrderIds.length === 0 && (
+                      <Button
+                        variant="secondary"
+                        onClick={handleExportAll}
+                        size="slim"
+                      >
+                        Export All
+                      </Button>
+                    )}
+                    {pageInfo.hasNextPage && (
+                      <Button variant="secondary" size="slim">
+                        Load More
+                      </Button>
+                    )}
+                  </ButtonGroup>
+                </InlineStack>
               </InlineStack>
 
               <DataTable
                 columnContentTypes={[
-                  'text',
-                  'text',
-                  'text',
-                  'text',
-                  'text',
-                  'numeric',
-                  'text'
+                  'text', // Checkbox
+                  'text', // Order
+                  'text', // Customer
+                  'text', // Date
+                  'text', // Payment Status
+                  'text', // Fulfillment Status
+                  'numeric', // Total
+                  'text' // Actions
                 ]}
                 headings={[
+                  <Checkbox
+                    key="select-all"
+                    checked={allSelected}
+                    indeterminate={someSelected}
+                    onChange={handleSelectAll}
+                   />,
                   'Order',
                   'Customer',
                   'Date',
