@@ -7,15 +7,20 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json* ./
+# Install yarn if not already available
+RUN corepack enable
 
-RUN npm ci --omit=dev && npm cache clean --force
+# Copy package files
+COPY package.json yarn.lock ./
+
+# Install dependencies using yarn
+RUN yarn install --frozen-lockfile --production && yarn cache clean
+
 # Remove CLI packages since we don't need them in production by default.
 # Remove this line if you want to run CLI commands in your container.
-RUN npm remove @shopify/cli
 
 COPY . .
 
-RUN npm run build
+RUN yarn build
 
-CMD ["npm", "run", "docker-start"]
+CMD ["yarn", "docker-start"]
