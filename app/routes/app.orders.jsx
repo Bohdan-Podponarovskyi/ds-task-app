@@ -17,6 +17,7 @@ import {
   Popover,
   ActionList,
   Spinner,
+  Banner,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
@@ -27,75 +28,138 @@ import { exportOrdersWithLineItems, exportOrdersSummary } from "../utils/csvExpo
 
 // Loader handles initial page load
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-
   try {
+    const { admin } = await authenticate.admin(request);
+
+    console.log("Starting GraphQL request for orders");
     const response = await admin.graphql(GET_ORDERS, {
       variables: { first: 5, after: null },
     });
 
+    // Log response details for debugging
+    console.log("GraphQL response status:", response.status);
+    console.log("GraphQL response ok:", response.ok);
+
     if (!response.ok) {
-      throw new Error(`GraphQL request failed: ${response.status}`);
+      console.error(`GraphQL request failed with status ${response.status}`);
+      // Try to get response text for more details
+      let errorText = 'Unknown error';
+      try {
+        errorText = await response.text();
+        console.error("Error response text:", errorText);
+      } catch (e) {
+        console.error("Could not read error response:", e);
+      }
+
+      throw new Error(`GraphQL request failed: ${response.status} - ${errorText}`);
     }
 
     const responseJson = await response.json();
+    console.log("GraphQL response data structure:", {
+      hasData: !!responseJson.data,
+      hasOrders: !!responseJson.data?.orders,
+      hasEdges: !!responseJson.data?.orders?.edges,
+      edgesLength: responseJson.data?.orders?.edges?.length || 0,
+      hasErrors: !!responseJson.errors
+    });
 
     if (responseJson.errors) {
+      console.error("GraphQL errors:", responseJson.errors);
       throw new Error(`GraphQL errors: ${JSON.stringify(responseJson.errors)}`);
     }
 
     return {
       orders: responseJson.data?.orders?.edges || [],
       pageInfo: responseJson.data?.orders?.pageInfo || {},
+      success: true,
     };
   } catch (error) {
-    console.error("Error fetching orders:", error);
+    console.error("Loader error details:", {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+
+    // Check if it's an authentication redirect
+    if (error.message?.includes('redirect') || error.status === 302) {
+      return {
+        orders: [],
+        pageInfo: {},
+        error: "Authentication session expired. Please refresh the page to re-authenticate.",
+        authError: true,
+      };
+    }
+
     return {
       orders: [],
       pageInfo: {},
       error: `Failed to load orders: ${error.message}`,
+      success: false,
     };
   }
-    };
+};
 
 // Action handles "load more" requests
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-
   try {
+    const { admin } = await authenticate.admin(request);
+
     const formData = await request.formData();
     const after = formData.get("after");
     const first = parseInt(formData.get("first") || "5");
+
+    console.log("Loading more orders:", { first, after });
 
     const response = await admin.graphql(GET_ORDERS, {
       variables: { first, after },
     });
 
     if (!response.ok) {
-      throw new Error(`GraphQL request failed: ${response.status}`);
+      console.error("Load more GraphQL request failed:", response.status);
+      let errorText = 'Unknown error';
+      try {
+        errorText = await response.text();
+      } catch (e) {
+        console.error("Could not read error response:", e);
+      }
+      throw new Error(`GraphQL request failed: ${response.status} - ${errorText}`);
     }
 
     const responseJson = await response.json();
     if (responseJson.errors) {
+      console.error("Load more GraphQL errors:", responseJson.errors);
       throw new Error(`GraphQL errors: ${JSON.stringify(responseJson.errors)}`);
     }
 
     return {
       orders: responseJson.data?.orders?.edges || [],
       pageInfo: responseJson.data?.orders?.pageInfo || {},
+      success: true,
     };
   } catch (error) {
-    console.error("Load more error:", error);
+    console.error("Action error:", error);
+
+    // Check if it's an authentication redirect
+    if (error.message?.includes('redirect') || error.status === 302) {
+      return {
+        orders: [],
+        pageInfo: {},
+        error: "Authentication session expired. Please refresh the page to re-authenticate.",
+        authError: true,
+      };
+    }
+
     return {
       orders: [],
       pageInfo: {},
       error: `Failed to load more orders: ${error.message}`,
+      success: false,
     };
   }
 };
 
 export default function OrdersPage() {
-  const { orders: initialOrders, pageInfo: initialPageInfo, error } = useLoaderData();
+  const { orders: initialOrders, pageInfo: initialPageInfo, error, authError, success } = useLoaderData();
   const loadMoreFetcher = useFetcher();
 
   // Combine initial orders with loaded orders
@@ -141,18 +205,36 @@ export default function OrdersPage() {
           <Layout.Section>
             <Card>
               <BlockStack gap="300">
+                {authError && (
+                  <Banner status="warning">
+                    Your session may have expired. Try refreshing the page or reinstalling the app.
+                  </Banner>
+                )}
                 <Text as="h2" variant="headingMd">
                   Error Loading Orders
                 </Text>
                 <Text variant="bodyMd" color="critical" as="p">
                   {error}
                 </Text>
-                <Button
-                  onClick={() => window.location.reload()}
-                  variant="primary"
-                >
-                  Retry
-                </Button>
+                <InlineStack gap="200">
+                  <Button
+                    onClick={() => window.location.reload()}
+                    variant="primary"
+                  >
+                    Refresh Page
+                  </Button>
+                  {authError && (
+                    <Button
+                      onClick={() => {
+                        // Force re-authentication by going to the root and back
+                        window.location.href = '/app';
+                      }}
+                      variant="secondary"
+                    >
+                      Re-authenticate
+                    </Button>
+                  )}
+                </InlineStack>
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -169,12 +251,28 @@ export default function OrdersPage() {
           <Layout.Section>
             <Card>
               <BlockStack gap="300">
+                {success === false && (
+                  <Banner status="info">
+                    There was an issue loading orders, but no specific error was returned.
+                  </Banner>
+                )}
                 <Text as="h2" variant="headingMd">
                   No Orders Found
                 </Text>
                 <Text variant="bodyMd" as="p">
-                  You don't have any orders yet. When customers place orders, they'll appear here.
+                  {success === false
+                    ? "Unable to load orders from your store. Please try refreshing the page."
+                    : "You don't have any orders yet. When customers place orders, they'll appear here."
+                  }
                 </Text>
+                {success === false && (
+                  <Button
+                    onClick={() => window.location.reload()}
+                    variant="primary"
+                  >
+                    Retry
+                  </Button>
+                )}
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -293,6 +391,12 @@ export default function OrdersPage() {
         <Layout.Section>
           <Card>
             <BlockStack gap="400">
+              {success && (
+                <Banner status="success">
+                  Successfully loaded {allOrders.length} orders from your store.
+                </Banner>
+              )}
+
               <InlineStack align="space-between">
                 <Text as="h2" variant="headingMd">
                   Recent Orders ({allOrders.length})
@@ -371,7 +475,7 @@ export default function OrdersPage() {
                     checked={allSelected}
                     indeterminate={someSelected}
                     onChange={handleSelectAll}
-                   />,
+                  />,
                   'Order',
                   'Customer',
                   'Date',
@@ -396,6 +500,18 @@ export default function OrdersPage() {
                 <Box background="bg-surface-critical-subdued" padding="200" borderRadius="100">
                   <Text as="p" variant="bodyMd" color="critical">
                     {loadMoreFetcher.data.error}
+                    {loadMoreFetcher.data.authError && (
+                      <>
+                        <br />
+                        <Button
+                          size="slim"
+                          onClick={() => window.location.reload()}
+                          variant="primary"
+                        >
+                          Refresh Page
+                        </Button>
+                      </>
+                    )}
                   </Text>
                 </Box>
               )}

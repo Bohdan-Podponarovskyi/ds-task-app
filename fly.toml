@@ -9,28 +9,32 @@ primary_region = 'waw'
 [build]
 
 [env]
-  PORT = '3000'
-  SCOPES = 'read_customers,read_orders,read_products'
-  SHOPIFY_API_KEY = '6f5e4e722d85413ce2d39c425de00c1d'
-  SHOPIFY_APP_URL = 'https://ds-task-application-prod.fly.dev'
+HOST = '0.0.0.0'
+PORT = '3000'
+SCOPES = 'read_customers,read_orders,read_products'
+SHOPIFY_API_KEY = '6f5e4e722d85413ce2d39c425de00c1d'
+SHOPIFY_APP_URL = 'https://ds-task-application-prod.fly.dev'
+DATABASE_URL = 'file:/data/dev.sqlite'
+NODE_OPTIONS = '--max-old-space-size=512'
 
 [processes]
-  app = 'node ./dbsetup.js npm run docker-start'
+app = 'node ./dbsetup.js npm run docker-start'
 
 [[mounts]]
-  source = 'data'
-  destination = '/data'
-  auto_extend_size_threshold = 80
-  auto_extend_size_increment = '1GB'
-  auto_extend_size_limit = '10GB'
+source = 'data'
+destination = '/data'
+auto_extend_size_threshold = 80
+auto_extend_size_increment = '1GB'
+auto_extend_size_limit = '10GB'
 
 [http_service]
-  internal_port = 3000
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+internal_port = 3000
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 0
+processes = ['app']
 
 [[vm]]
-  size = 'shared-cpu-1x'
+size = 'shared-cpu-2x'
+memory = '1gb'
